@@ -1,5 +1,8 @@
 mod reachability;
 mod types;
+mod db;
+mod models;
+mod schema;
 
 use ethers::contract::abigen;
 use ethers::prelude::*;
@@ -10,6 +13,8 @@ use std::time::Duration as StdDuration;
 
 use reachability::check_reachability;
 use types::Metadata;
+use db::establish_connection_pool;
+use models::NewReachabilityError;
 
 use crate::reachability::wait_for_ip_address;
 
@@ -19,24 +24,24 @@ abigen!(MarketV1, "src/abis/oyster_market_abi.json");
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    // Load environment variables from .env file
     dotenvy::dotenv().ok();
 
-    // Get WebSocket RPC URL from environment
+    // Establish database connection pool
+    let pool = establish_connection_pool();
+    info!("Database connection pool established");
+
     let ws_url = std::env::var("WS_URL").expect("WS_URL must be set in .env file");
 
-    // Connect to websocket
+
     let ws = Ws::connect(&ws_url).await?;
     let provider = Provider::new(ws);
     let provider = Arc::new(provider);
 
-    // Get contract address from environment
     let contract_address_str =
         std::env::var("CONTRACT_ADDRESS").expect("CONTRACT_ADDRESS must be set in .env file");
     let contract_addr: Address = contract_address_str.parse()?;
     let contract = MarketV1::new(contract_addr, provider.clone());
 
-    // Subscribe to JobOpened events from a specific block
     let binding = contract.event::<JobOpenedFilter>();
     let mut stream = binding.stream().await?;
     info!("Listening for JobOpened events...");
@@ -48,7 +53,6 @@ async fn main() -> anyhow::Result<()> {
         let operator = event.provider;
         let cp_url = contract.providers(operator).call().await?;
 
-        // Parse metadata JSON into struct
         let metadata: Metadata = match serde_json::from_str(&metadata_str) {
             Ok(m) => m,
             Err(e) => {
@@ -60,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
+        let pool_clone = pool.clone();
         tokio::spawn(async move {
             info!("Handling JobOpened event:");
             info!("job: {:?}", job);
@@ -83,7 +88,23 @@ async fn main() -> anyhow::Result<()> {
             {
                 Ok(ip) => ip,
                 Err(e) => {
-                    error!("Failed to get IP address: {}", e);
+                    let error_msg = format!("Failed to get IP address: {}", e);
+                    error!("{}", error_msg);
+                    
+                    // Log error to database
+                    let operator_str = format!("{:?}", operator);
+                    let new_error = NewReachabilityError::new(
+                        job.clone(),
+                        operator_str,
+                        "N/A".to_string(),
+                        error_msg,
+                    );
+                    
+                    if let Ok(mut conn) = pool_clone.get() {
+                        if let Err(db_err) = new_error.insert(&mut conn) {
+                            error!("Failed to insert error into database: {}", db_err);
+                        }
+                    }
                     return;
                 }
             };
@@ -93,7 +114,23 @@ async fn main() -> anyhow::Result<()> {
             if check_reachability(&instance_ip).await {
                 info!("Instance is reachable");
             } else {
-                error!("Instance reachability test failed");
+                let error_msg = "Instance reachability test failed";
+                error!("{}", error_msg);
+                
+                // Log error to database
+                let operator_str = format!("{:?}", operator);
+                let new_error = NewReachabilityError::new(
+                    job.clone(),
+                    operator_str,
+                    instance_ip.clone(),
+                    error_msg.to_string(),
+                );
+                
+                if let Ok(mut conn) = pool_clone.get() {
+                    if let Err(db_err) = new_error.insert(&mut conn) {
+                        error!("Failed to insert error into database: {}", db_err);
+                    }
+                }
             }
         });
     }
