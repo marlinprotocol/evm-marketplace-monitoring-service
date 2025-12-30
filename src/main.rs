@@ -64,6 +64,22 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
+        // Check if the URL matches the allowed blue images
+        if let Some(url) = &metadata.url {
+            let allowed_urls = [
+                "https://artifacts.marlin.org/oyster/eifs/base-blue_v3.0.0_linux_amd64.eif",
+                "https://artifacts.marlin.org/oyster/eifs/base-blue_v3.0.0_linux_arm64.eif",
+            ];
+            
+            if !allowed_urls.contains(&url.as_str()) {
+                info!("Not using blue images for deployment. URL in metadata: {}", url);
+                continue;
+            }
+        } else {
+            info!("No URL found in metadata, skipping deployment checks");
+            continue;
+        }
+
         let pool_clone = pool.clone();
         tokio::spawn(async move {
             info!("Handling JobOpened event:");
