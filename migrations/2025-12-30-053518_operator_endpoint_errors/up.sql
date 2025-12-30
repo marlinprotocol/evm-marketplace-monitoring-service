@@ -1,4 +1,5 @@
-CREATE TABLE reachability_errors (
+-- Your SQL goes here
+CREATE TABLE operator_endpoint_errors (
     id SERIAL PRIMARY KEY,
     job VARCHAR NOT NULL,
     operator VARCHAR NOT NULL,
@@ -8,7 +9,7 @@ CREATE TABLE reachability_errors (
 );
 
 -- Create an index on job for faster lookups
-CREATE INDEX idx_reachability_errors_job ON reachability_errors(job);
+CREATE INDEX idx_operator_endpoint_errors_job ON operator_endpoint_errors(job);
 
 -- Create an index on timestamp for time-based queries
-CREATE INDEX idx_reachability_errors_timestamp ON reachability_errors(timestamp);
+CREATE INDEX idx_operator_endpoint_errors_timestamp ON operator_endpoint_errors(timestamp);

@@ -14,7 +14,7 @@ use std::time::Duration as StdDuration;
 use reachability::check_reachability;
 use types::Metadata;
 use db::establish_connection_pool;
-use models::NewReachabilityError;
+use models::{NewReachabilityError, NewOperatorEndpointError};
 
 use crate::reachability::wait_for_ip_address;
 
@@ -68,7 +68,6 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             info!("Handling JobOpened event:");
             info!("job: {:?}", job);
-            info!("metadata: {:?}", metadata);
             info!("owner: {:?}", owner);
             info!("operator: {:?}", operator);
             info!("cp_url: {:?}", cp_url);
@@ -129,6 +128,79 @@ async fn main() -> anyhow::Result<()> {
                 if let Ok(mut conn) = pool_clone.get() {
                     if let Err(db_err) = new_error.insert(&mut conn) {
                         error!("Failed to insert error into database: {}", db_err);
+                    }
+                }
+            }
+
+            // Call the refresh API to verify IP is available
+            let refresh_url = format!("https://sk.arb1.marlin.org/operators/jobs/refresh/ArbOne/{}", job);
+            info!("Calling refresh API: {}", refresh_url);
+            
+            let client = reqwest::Client::new();
+            match client.get(&refresh_url).send().await {
+                Ok(response) => {
+                    match response.json::<serde_json::Value>().await {
+                        Ok(json) => {
+                            if json.get("ip").is_some() {
+                                info!("IP key found in refresh API response");
+                            } else {
+                                let error_msg = "IP key NOT found in refresh API response";
+                                error!("{}", error_msg);
+                                
+                                // Log error to database
+                                let operator_str = format!("{:?}", operator);
+                                let new_error = NewOperatorEndpointError::new(
+                                    job.clone(),
+                                    operator_str,
+                                    instance_ip.clone(),
+                                    error_msg.to_string(),
+                                );
+                                
+                                if let Ok(mut conn) = pool_clone.get() {
+                                    if let Err(db_err) = new_error.insert(&mut conn) {
+                                        error!("Failed to insert error into database: {}", db_err);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let error_msg = format!("Failed to parse refresh API response: {}", e);
+                            error!("{}", error_msg);
+                            
+                            // Log error to database
+                            let operator_str = format!("{:?}", operator);
+                            let new_error = NewOperatorEndpointError::new(
+                                job.clone(),
+                                operator_str,
+                                instance_ip.clone(),
+                                error_msg,
+                            );
+                            
+                            if let Ok(mut conn) = pool_clone.get() {
+                                if let Err(db_err) = new_error.insert(&mut conn) {
+                                    error!("Failed to insert error into database: {}", db_err);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to call refresh API: {}", e);
+                    error!("{}", error_msg);
+                    
+                    // Log error to database
+                    let operator_str = format!("{:?}", operator);
+                    let new_error = NewOperatorEndpointError::new(
+                        job.clone(),
+                        operator_str,
+                        instance_ip.clone(),
+                        error_msg,
+                    );
+                    
+                    if let Ok(mut conn) = pool_clone.get() {
+                        if let Err(db_err) = new_error.insert(&mut conn) {
+                            error!("Failed to insert error into database: {}", db_err);
+                        }
                     }
                 }
             }
