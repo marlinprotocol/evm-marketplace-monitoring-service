@@ -8,6 +8,7 @@ use ethers::contract::abigen;
 use ethers::prelude::*;
 use ethers::providers::{Http, Provider};
 use log::{error, info};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
@@ -29,6 +30,11 @@ async fn main() -> anyhow::Result<()> {
     // Establish database connection pool
     let pool = establish_connection_pool();
     info!("Database connection pool established");
+
+    // Create HashMap of allowed URLs by architecture
+    let mut allowed_urls: HashMap<&str, &str> = HashMap::new();
+    allowed_urls.insert("amd64", "https://artifacts.marlin.org/oyster/eifs/base-blue_v3.0.0_linux_amd64.eif");
+    allowed_urls.insert("arm64", "https://artifacts.marlin.org/oyster/eifs/base-blue_v3.0.0_linux_arm64.eif");
 
     let rpc_url = std::env::var("RPC_URL").expect("RPC_URL must be set in .env file");
 
@@ -116,18 +122,43 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
-            // Check if the URL matches the allowed blue images
             if let Some(url) = &metadata.url {
-                let allowed_urls = [
-                    "https://artifacts.marlin.org/oyster/eifs/base-blue_v3.0.0_linux_amd64.eif",
-                    "https://artifacts.marlin.org/oyster/eifs/base-blue_v3.0.0_linux_arm64.eif",
-                ];
-
-                if !allowed_urls.contains(&url.as_str()) {
+                // Check if URL is in allowed_urls
+                if !allowed_urls.values().any(|&allowed_url| allowed_url == url.as_str()) {
                     info!(
-                        "Not using blue images for deployment. URL in metadata: {}",
+                        "URL not in allowed blue images. Skipping the checks. URL in metadata: {}",
                         url
                     );
+                    continue;
+                }
+
+                // Determine architecture from instance
+                if let Some(instance) = &metadata.instance {
+                    if let Some(first_part) = instance.split('.').next() {
+                        let arch = if first_part.chars().last() == Some('g') {
+                            "arm64"
+                        } else {
+                            "amd64"
+                        };
+
+                        info!("Determined architecture: {} from instance: {}", arch, instance);
+
+                        // Check if URL matches the expected URL for this architecture
+                        if let Some(&expected_url) = allowed_urls.get(arch) {
+                            if url != expected_url {
+                                info!(
+                                    "Not using correct blue image for architecture {}. URL in metadata: {}, expected: {}",
+                                    arch, url, expected_url
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        info!("Could not parse instance for architecture determination: {}", instance);
+                        continue;
+                    }
+                } else {
+                    info!("No instance found in metadata, skipping architecture check");
                     continue;
                 }
             } else {
