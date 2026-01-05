@@ -71,7 +71,7 @@ pub async fn wait_for_ip_address(url: &str, job_id: String, region: &str) -> Res
 }
 
 pub async fn ping_ip(ip: &str) -> bool {
-    const TCP_CHECK_RETRIES: u32 = 20;
+    const TCP_CHECK_RETRIES: u32 = 10;
     const TCP_CHECK_INTERVAL: u64 = 15;
     let address = format!("{}:1300", ip);
     for attempt in 1..=TCP_CHECK_RETRIES {
